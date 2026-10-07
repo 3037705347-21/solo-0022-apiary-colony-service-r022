@@ -12,6 +12,7 @@ type Snapshot struct {
 	Hives             map[string]domain.Hive
 	InspectionsByHive map[string][]domain.Inspection
 	QueensByHive      map[string][]domain.Queen
+	HandoversByApiary map[string][]domain.KeeperHandover
 }
 
 // ApiaryHives 返回蜂场下的蜂箱，按编号升序稳定排序。

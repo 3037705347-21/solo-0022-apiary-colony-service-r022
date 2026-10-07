@@ -77,6 +77,16 @@
       "failure": "未知蜂场返回未找到，asOf 非法返回校验错误",
       "verification": "校验入口构造多蜂箱场景并断言计数、待巡检与排序稳定",
       "module_ids": ["httpapi", "status", "store"]
+    },
+    {
+      "id": "handover-keeper",
+      "name": "办理值守人交接",
+      "entry": "POST /apiaries/{apiaryId}/handovers",
+      "steps": ["确认蜂场存在并校验双方非空且不同", "在同一写锁内核对 fromKeeper 为当前值守人", "固化交接时间与双方信息并切换蜂场当前值守人"],
+      "success": "返回 201 与含交接时间、双方信息的交接记录，蜂场当前值守人切换为新值守人",
+      "failure": "未知蜂场返回未找到，双方相同或字段非法返回校验错误，fromKeeper 与当前值守人不一致返回冲突",
+      "verification": "校验入口断言交接链留存、交接前后蜂箱与巡检归属切换，以及并发交接与交接/巡检交错时每条记录归属单一且线性化",
+      "module_ids": ["httpapi", "apiary", "domain", "store"]
     }
   ]
 }

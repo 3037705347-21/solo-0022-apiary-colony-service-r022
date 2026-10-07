@@ -41,19 +41,22 @@ go run ./cmd/check -workflow read-apiary-status
 
 - `GET /healthz`：返回 `{"status":"healthy"}`。
 - `POST /apiaries`：输入 `id`、`name`、`district`、`keeper`，成功返回 201 与蜂场。
-- `GET /apiaries/{apiaryId}`：读回蜂场。
+- `GET /apiaries/{apiaryId}`：读回蜂场（含当前值守人）。
+- `POST /apiaries/{apiaryId}/handovers`：协调人办理值守人交接，输入 `fromKeeper`、
+  `toKeeper`、可选 `handedOverAt`（RFC3339），返回 201 与含交接时间和双方信息的交接记录。
+- `GET /apiaries/{apiaryId}/handovers`：按交接时间升序列出交接链。
 - `POST /apiaries/{apiaryId}/hives`：输入 `id`、`model`（`langstroth`、`top_bar`、`warre`），
-  成功返回 201 与状态为 `colonized` 的蜂箱。
-- `GET /hives/{hiveId}`：读回蜂箱。
+  成功返回 201 与状态为 `colonized` 的蜂箱，并固化提交时的归属值守人 `keeper`。
+- `GET /hives/{hiveId}`：读回蜂箱（含固化的归属值守人 `keeper`）。
 - `POST /hives/{hiveId}/state`：输入 `target`，返回迁移前后的状态。
 - `POST /hives/{hiveId}/inspections`：输入 `observedAt`（可选，RFC3339）、`colonyStrength`、
-  `broodPattern`、`temper`、`miteCount`、`note`，返回巡检与派生关注项。
-- `GET /hives/{hiveId}/inspections`：列出巡检。
+  `broodPattern`、`temper`、`miteCount`、`note`，返回巡检与派生关注项，并固化提交时的归属值守人 `keeper`。
+- `GET /hives/{hiveId}/inspections`：列出巡检（各含固化的归属值守人 `keeper`）。
 - `POST /hives/{hiveId}/queens`：输入 `origin`、`introducedAt`（可选）、`reason`，
   返回带标记色的新蜂王记录。
 - `GET /hives/{hiveId}/queens`：列出蜂王记录。
 - `GET /apiaries/{apiaryId}/status`：可选查询参数 `asOf`（RFC3339），返回状态计数、
-  待巡检蜂箱、有未处理关注项的蜂箱与逐蜂箱摘要。
+  蜂场当前值守人、逐蜂箱固化归属、待巡检蜂箱、有未处理关注项的蜂箱与逐蜂箱摘要。
 
 错误响应统一为：
 
@@ -73,6 +76,11 @@ go run ./cmd/check -workflow read-apiary-status
 - 巡检关注项阈值：螨计数 ≥ 9 记 `mite_load`，子脾为 `none` 记 `brood_gap`，
   性情为 `aggressive` 记 `temper_risk`，群势 ≤ 2 记 `low_strength`。
 - 待巡检：从未巡检，或距 `asOf` 超过 14 天。
+- 值守人交接：协调人提交原值守人 `fromKeeper` 与新值守人 `toKeeper`（不能相同）。
+  服务固化交接时间与双方信息，并把蜂场当前值守人切为新值守人；声明的原值守人与
+  当前值守人不一致时返回冲突。交接之后新建蜂箱、提交巡检归属新值守人；交接之前
+  已形成的蜂箱与巡检保留原归属、仍可读。所有写入在同一把写锁线性化，并发交接只有
+  一个成功，交接与写入交错时每条记录的归属在原、新值守人之间二选一。
 
 ## 环境变量
 
@@ -89,6 +97,7 @@ go run ./cmd/check -workflow record-inspection
 go run ./cmd/check -workflow replace-queen
 go run ./cmd/check -workflow advance-hive-state
 go run ./cmd/check -workflow read-apiary-status
+go run ./cmd/check -workflow handover-keeper
 ```
 
 ## 测试边界

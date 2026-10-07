@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -17,9 +18,11 @@ type Memory struct {
 	hives       map[string]domain.Hive
 	inspections map[string][]domain.Inspection
 	queens      map[string][]domain.Queen
+	handovers   map[string][]domain.KeeperHandover
 
 	inspectionSeq int
 	queenSeq      int
+	handoverSeq   int
 }
 
 func NewMemory() *Memory {
@@ -28,6 +31,7 @@ func NewMemory() *Memory {
 		hives:       make(map[string]domain.Hive),
 		inspections: make(map[string][]domain.Inspection),
 		queens:      make(map[string][]domain.Queen),
+		handovers:   make(map[string][]domain.KeeperHandover),
 	}
 }
 
@@ -48,17 +52,63 @@ func (m *Memory) GetApiary(id string) (domain.Apiary, bool) {
 	return apiary, ok
 }
 
-func (m *Memory) CreateHive(hive domain.Hive) error {
+// HandoverKeeper 在同一把写锁内完成当前值守人核对、交接记录写入与蜂场值守人切换。
+// 协调人声明的 fromKeeper 必须与当前值守人一致：并发交接中只有第一个提交者能匹配成功，
+// 其余提交者看到已切换的值守人而得到冲突，保证值守人切换是一次串行的线性化提交。
+// 交接只改蜂场的当前值守人，不回写任何蜂箱与巡检的历史归属。
+func (m *Memory) HandoverKeeper(handover domain.KeeperHandover) (domain.KeeperHandover, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.apiaries[hive.ApiaryID]; !ok {
-		return domain.NotFound("蜂场", hive.ApiaryID)
+	apiary, ok := m.apiaries[handover.ApiaryID]
+	if !ok {
+		return domain.KeeperHandover{}, domain.NotFound("蜂场", handover.ApiaryID)
+	}
+	if apiary.Keeper != handover.FromKeeper {
+		return domain.KeeperHandover{}, domain.Conflict(
+			"蜂场 %q 当前值守人为 %q，与声明的 fromKeeper %q 不一致，可能已发生交接",
+			handover.ApiaryID, apiary.Keeper, handover.FromKeeper)
+	}
+	m.handoverSeq++
+	handover.ID = fmt.Sprintf("handover-%06d", m.handoverSeq)
+	m.handovers[handover.ApiaryID] = append(m.handovers[handover.ApiaryID], handover)
+	apiary.Keeper = handover.ToKeeper
+	m.apiaries[handover.ApiaryID] = apiary
+	return handover, nil
+}
+
+// ListHandovers 返回蜂场的交接记录，按交接时刻升序；时刻相同时按编号升序，顺序稳定。
+func (m *Memory) ListHandovers(apiaryID string) ([]domain.KeeperHandover, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.apiaries[apiaryID]; !ok {
+		return nil, domain.NotFound("蜂场", apiaryID)
+	}
+	items := m.handovers[apiaryID]
+	out := append([]domain.KeeperHandover{}, items...)
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].HandedOverAt.Equal(out[j].HandedOverAt) {
+			return out[i].HandedOverAt.Before(out[j].HandedOverAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func (m *Memory) CreateHive(hive domain.Hive) (domain.Hive, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	apiary, ok := m.apiaries[hive.ApiaryID]
+	if !ok {
+		return domain.Hive{}, domain.NotFound("蜂场", hive.ApiaryID)
 	}
 	if _, ok := m.hives[hive.ID]; ok {
-		return domain.Conflict("蜂箱 %q 已存在", hive.ID)
+		return domain.Hive{}, domain.Conflict("蜂箱 %q 已存在", hive.ID)
 	}
+	// 归属取本把写锁提交时刻蜂场的当前值守人，与交接在同一把锁上串行，
+	// 因此蜂箱的归属在交接两侧二选一，不会出现一名归属两名值守人。
+	hive.Keeper = apiary.Keeper
 	m.hives[hive.ID] = hive
-	return nil
+	return hive, nil
 }
 
 func (m *Memory) GetHive(id string) (domain.Hive, bool) {
@@ -101,9 +151,16 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	if !hive.AcceptsInspection() {
 		return domain.Inspection{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受巡检", hiveID, hive.State)
 	}
+	apiary, ok := m.apiaries[hive.ApiaryID]
+	if !ok {
+		return domain.Inspection{}, domain.Storage("蜂箱 %q 所属蜂场 %q 记录缺失", hiveID, hive.ApiaryID)
+	}
 	m.inspectionSeq++
 	inspection.ID = fmt.Sprintf("inspection-%06d", m.inspectionSeq)
 	inspection.HiveID = hiveID
+	// 归属取本把写锁提交时刻的当前值守人，与交接串行；
+	// 交接之前已固化的巡检记录不会被改写，新巡检按新值守人归属。
+	inspection.Keeper = apiary.Keeper
 	m.inspections[hiveID] = append(m.inspections[hiveID], inspection)
 
 	observedAt := inspection.ObservedAt
@@ -198,6 +255,7 @@ func (m *Memory) Snapshot() Snapshot {
 		Hives:             make(map[string]domain.Hive, len(m.hives)),
 		InspectionsByHive: make(map[string][]domain.Inspection, len(m.inspections)),
 		QueensByHive:      make(map[string][]domain.Queen, len(m.queens)),
+		HandoversByApiary: make(map[string][]domain.KeeperHandover, len(m.handovers)),
 	}
 	for id, apiary := range m.apiaries {
 		snapshot.Apiaries[id] = apiary
@@ -223,6 +281,11 @@ func (m *Memory) Snapshot() Snapshot {
 			}
 		}
 		snapshot.QueensByHive[id] = copied
+	}
+	for id, items := range m.handovers {
+		copied := make([]domain.KeeperHandover, len(items))
+		copy(copied, items)
+		snapshot.HandoversByApiary[id] = copied
 	}
 	return snapshot
 }

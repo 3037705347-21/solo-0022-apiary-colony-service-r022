@@ -12,6 +12,7 @@ const InspectionWindow = 14 * 24 * time.Hour
 
 type HiveSummary struct {
 	HiveID           string     `json:"hiveId"`
+	Keeper           string     `json:"keeper"`
 	State            string     `json:"state"`
 	LastInspectionAt *time.Time `json:"lastInspectionAt"`
 	LatestConcerns   []string   `json:"latestConcerns"`
@@ -22,6 +23,7 @@ type HiveSummary struct {
 type Report struct {
 	ApiaryID        string         `json:"apiaryId"`
 	Name            string         `json:"name"`
+	Keeper          string         `json:"keeper"`
 	AsOf            time.Time      `json:"asOf"`
 	HiveCount       int            `json:"hiveCount"`
 	StateCounts     map[string]int `json:"stateCounts"`
@@ -37,6 +39,7 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 	report := Report{
 		ApiaryID:        apiary.ID,
 		Name:            apiary.Name,
+		Keeper:          apiary.Keeper,
 		AsOf:            asOf,
 		StateCounts:     initialStateCounts(),
 		NeedsInspection: []string{},
@@ -49,6 +52,7 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 		report.StateCounts[string(hive.State)]++
 		summary := HiveSummary{
 			HiveID:           hive.ID,
+			Keeper:           hive.Keeper,
 			State:            string(hive.State),
 			LastInspectionAt: hive.LastInspectionAt,
 			LatestConcerns:   []string{},

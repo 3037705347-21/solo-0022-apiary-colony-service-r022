@@ -5,6 +5,8 @@ func (s *Server) register() {
 
 	s.mux.HandleFunc("POST /apiaries", s.handleRegisterApiary)
 	s.mux.HandleFunc("GET /apiaries/{apiaryId}", s.handleGetApiary)
+	s.mux.HandleFunc("POST /apiaries/{apiaryId}/handovers", s.handleHandoverKeeper)
+	s.mux.HandleFunc("GET /apiaries/{apiaryId}/handovers", s.handleListHandovers)
 	s.mux.HandleFunc("GET /apiaries/{apiaryId}/status", s.handleApiaryStatus)
 	s.mux.HandleFunc("POST /apiaries/{apiaryId}/hives", s.handleInstallHive)
 

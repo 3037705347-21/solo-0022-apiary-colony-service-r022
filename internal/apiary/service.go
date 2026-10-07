@@ -32,6 +32,12 @@ type InstallHiveInput struct {
 	Model string
 }
 
+type HandoverKeeperInput struct {
+	FromKeeper   string
+	ToKeeper     string
+	HandedOverAt time.Time
+}
+
 func (s *Service) RegisterApiary(input RegisterApiaryInput) (domain.Apiary, error) {
 	apiary, err := domain.NewApiary(input.ID, input.Name, input.District, input.Keeper, s.clock())
 	if err != nil {
@@ -63,10 +69,11 @@ func (s *Service) InstallHive(apiaryID string, input InstallHiveInput) (domain.H
 	if err != nil {
 		return domain.Hive{}, err
 	}
-	if err := s.store.CreateHive(hive); err != nil {
+	stored, err := s.store.CreateHive(hive)
+	if err != nil {
 		return domain.Hive{}, err
 	}
-	return hive, nil
+	return stored, nil
 }
 
 func (s *Service) Hive(id string) (domain.Hive, error) {
@@ -83,4 +90,23 @@ func (s *Service) AdvanceHiveState(hiveID, target string) (domain.Transition, er
 		return domain.Transition{}, err
 	}
 	return s.store.AdvanceHive(hiveID, to, s.clock())
+}
+
+// HandoverKeeper 由协调人办理值守人交接：校验字段后交给仓储在同一把写锁内
+// 核对当前值守人、写入交接记录并切换蜂场当前值守人。
+func (s *Service) HandoverKeeper(apiaryID string, input HandoverKeeperInput) (domain.KeeperHandover, error) {
+	handedOverAt := input.HandedOverAt
+	if handedOverAt.IsZero() {
+		handedOverAt = s.clock()
+	}
+	handover, err := domain.NewKeeperHandover(apiaryID, input.FromKeeper, input.ToKeeper, handedOverAt)
+	if err != nil {
+		return domain.KeeperHandover{}, err
+	}
+	return s.store.HandoverKeeper(handover)
+}
+
+// Handovers 读回蜂场的交接链，保留每一次交接的时间与双方信息。
+func (s *Service) Handovers(apiaryID string) ([]domain.KeeperHandover, error) {
+	return s.store.ListHandovers(apiaryID)
 }
