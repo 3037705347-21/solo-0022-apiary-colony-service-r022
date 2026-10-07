@@ -41,9 +41,12 @@ go run ./cmd/check -workflow read-apiary-status
 
 - `GET /healthz`：返回 `{"status":"healthy"}`。
 - `POST /apiaries`：输入 `id`、`name`、`district`、`keeper`，成功返回 201 与蜂场。
-- `GET /apiaries/{apiaryId}`：读回蜂场。
+- `GET /apiaries/{apiaryId}`：读回蜂场（含当前值守人）。
+- `POST /apiaries/{apiaryId}/keeper-handovers`：输入 `toKeeper`，成功返回 201 与交接记录
+  （含交出方、接任方与交接时间），蜂场当前值守人切换为接任者。
+- `GET /apiaries/{apiaryId}/keeper-handovers`：按交接顺序列出交接历史。
 - `POST /apiaries/{apiaryId}/hives`：输入 `id`、`model`（`langstroth`、`top_bar`、`warre`），
-  成功返回 201 与状态为 `colonized` 的蜂箱。
+  成功返回 201 与状态为 `colonized` 的蜂箱（含归属值守人 `keeper`）。
 - `GET /hives/{hiveId}`：读回蜂箱。
 - `POST /hives/{hiveId}/state`：输入 `target`，返回迁移前后的状态。
 - `POST /hives/{hiveId}/inspections`：输入 `observedAt`（可选，RFC3339）、`colonyStrength`、
@@ -65,6 +68,8 @@ go run ./cmd/check -workflow read-apiary-status
 
 ## 业务规则摘要
 
+- 蜂箱与巡检在写入时归属当时值守人；值守人交接只影响之后的写入，历史记录保持原归属，
+  交接与写入串行提交，任何记录只归属一位值守人。
 - 蜂群状态：`colonized` 可到 `production`，`production` 与 `wintering` 可互相切换，
   三者都可到终态 `retired`；迁移到自身视为冲突。
 - 已退役蜂箱不再接受巡检与换王。
@@ -89,6 +94,7 @@ go run ./cmd/check -workflow record-inspection
 go run ./cmd/check -workflow replace-queen
 go run ./cmd/check -workflow advance-hive-state
 go run ./cmd/check -workflow read-apiary-status
+go run ./cmd/check -workflow handover-keeper
 ```
 
 ## 测试边界

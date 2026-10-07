@@ -20,9 +20,11 @@ const (
 )
 
 // Hive 表示一只蜂箱及其当前蜂群状态。
+// Keeper 是安装蜂箱时固化的归属值守人，不随之后的值守人交接改变。
 type Hive struct {
 	ID               string     `json:"id"`
 	ApiaryID         string     `json:"apiaryId"`
+	Keeper           string     `json:"keeper"`
 	Model            HiveModel  `json:"model"`
 	State            HiveState  `json:"state"`
 	InstalledAt      time.Time  `json:"installedAt"`

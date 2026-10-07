@@ -32,6 +32,10 @@ type InstallHiveInput struct {
 	Model string
 }
 
+type HandoverKeeperInput struct {
+	ToKeeper string
+}
+
 func (s *Service) RegisterApiary(input RegisterApiaryInput) (domain.Apiary, error) {
 	apiary, err := domain.NewApiary(input.ID, input.Name, input.District, input.Keeper, s.clock())
 	if err != nil {
@@ -51,6 +55,16 @@ func (s *Service) Apiary(id string) (domain.Apiary, error) {
 	return apiary, nil
 }
 
+// HandoverKeeper 办理值守人交接：记录交出方、接任方与交接时间，
+// 并把蜂场当前值守人切换为接任者；交接前已形成的记录保持原归属。
+func (s *Service) HandoverKeeper(apiaryID string, input HandoverKeeperInput) (domain.KeeperHandover, error) {
+	return s.store.HandoverKeeper(apiaryID, input.ToKeeper, s.clock())
+}
+
+func (s *Service) KeeperHandovers(apiaryID string) ([]domain.KeeperHandover, error) {
+	return s.store.ListKeeperHandovers(apiaryID)
+}
+
 func (s *Service) InstallHive(apiaryID string, input InstallHiveInput) (domain.Hive, error) {
 	if _, err := s.Apiary(apiaryID); err != nil {
 		return domain.Hive{}, err
@@ -63,10 +77,7 @@ func (s *Service) InstallHive(apiaryID string, input InstallHiveInput) (domain.H
 	if err != nil {
 		return domain.Hive{}, err
 	}
-	if err := s.store.CreateHive(hive); err != nil {
-		return domain.Hive{}, err
-	}
-	return hive, nil
+	return s.store.CreateHive(hive)
 }
 
 func (s *Service) Hive(id string) (domain.Hive, error) {

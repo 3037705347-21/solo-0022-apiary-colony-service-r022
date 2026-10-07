@@ -19,9 +19,11 @@ const (
 )
 
 // Inspection 是一次现场巡检的固化结果，关注项由量测派生。
+// Keeper 是提交巡检时固化的归属值守人，不随之后的值守人交接改变。
 type Inspection struct {
 	ID             string       `json:"id"`
 	HiveID         string       `json:"hiveId"`
+	Keeper         string       `json:"keeper"`
 	ObservedAt     time.Time    `json:"observedAt"`
 	ColonyStrength int          `json:"colonyStrength"`
 	BroodPattern   BroodPattern `json:"broodPattern"`

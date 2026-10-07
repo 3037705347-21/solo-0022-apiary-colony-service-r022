@@ -17,9 +17,11 @@ type Memory struct {
 	hives       map[string]domain.Hive
 	inspections map[string][]domain.Inspection
 	queens      map[string][]domain.Queen
+	handovers   map[string][]domain.KeeperHandover
 
 	inspectionSeq int
 	queenSeq      int
+	handoverSeq   int
 }
 
 func NewMemory() *Memory {
@@ -28,6 +30,7 @@ func NewMemory() *Memory {
 		hives:       make(map[string]domain.Hive),
 		inspections: make(map[string][]domain.Inspection),
 		queens:      make(map[string][]domain.Queen),
+		handovers:   make(map[string][]domain.KeeperHandover),
 	}
 }
 
@@ -48,17 +51,57 @@ func (m *Memory) GetApiary(id string) (domain.Apiary, bool) {
 	return apiary, ok
 }
 
-func (m *Memory) CreateHive(hive domain.Hive) error {
+// HandoverKeeper 在同一把写锁内读取现任值守人、写入交接记录并切换当前值守人，
+// 保证并发交接或交接与蜂箱、巡检写入交错时，归属判定只看到交接前或交接后的一种结果。
+func (m *Memory) HandoverKeeper(apiaryID, toKeeper string, handedOverAt time.Time) (domain.KeeperHandover, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.apiaries[hive.ApiaryID]; !ok {
-		return domain.NotFound("蜂场", hive.ApiaryID)
+	apiary, ok := m.apiaries[apiaryID]
+	if !ok {
+		return domain.KeeperHandover{}, domain.NotFound("蜂场", apiaryID)
+	}
+	handover, err := domain.NewKeeperHandover(apiaryID, apiary.Keeper, toKeeper, handedOverAt)
+	if err != nil {
+		return domain.KeeperHandover{}, err
+	}
+	if apiary.Keeper == handover.ToKeeper {
+		return domain.KeeperHandover{}, domain.Conflict("蜂场 %q 的值守人已经是 %q", apiaryID, handover.ToKeeper)
+	}
+	m.handoverSeq++
+	handover.ID = fmt.Sprintf("handover-%06d", m.handoverSeq)
+	apiary.Keeper = handover.ToKeeper
+	m.apiaries[apiaryID] = apiary
+	m.handovers[apiaryID] = append(m.handovers[apiaryID], handover)
+	return handover, nil
+}
+
+func (m *Memory) ListKeeperHandovers(apiaryID string) ([]domain.KeeperHandover, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.apiaries[apiaryID]; !ok {
+		return nil, domain.NotFound("蜂场", apiaryID)
+	}
+	items := m.handovers[apiaryID]
+	out := make([]domain.KeeperHandover, len(items))
+	copy(out, items)
+	return out, nil
+}
+
+// CreateHive 写入蜂箱，并在同一把写锁内把蜂场当前值守人固化为蜂箱归属，
+// 保证与值守人交接交错时蜂箱只归属交接前或交接后的一位值守人。
+func (m *Memory) CreateHive(hive domain.Hive) (domain.Hive, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	apiary, ok := m.apiaries[hive.ApiaryID]
+	if !ok {
+		return domain.Hive{}, domain.NotFound("蜂场", hive.ApiaryID)
 	}
 	if _, ok := m.hives[hive.ID]; ok {
-		return domain.Conflict("蜂箱 %q 已存在", hive.ID)
+		return domain.Hive{}, domain.Conflict("蜂箱 %q 已存在", hive.ID)
 	}
+	hive.Keeper = apiary.Keeper
 	m.hives[hive.ID] = hive
-	return nil
+	return hive, nil
 }
 
 func (m *Memory) GetHive(id string) (domain.Hive, bool) {
@@ -91,6 +134,7 @@ func (m *Memory) AdvanceHive(hiveID string, target domain.HiveState, _ time.Time
 
 // AddInspection 分配巡检编号、写入记录，并推进蜂箱的最近巡检时间。
 // 蜂箱存在与可接受巡检的判定与写入处于同一把锁，避免退役与巡检之间的竞态。
+// 归属值守人也在同一把锁内从蜂场当前值守人固化，避免与交接交错时一条巡检归属两人。
 func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (domain.Inspection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -101,9 +145,14 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	if !hive.AcceptsInspection() {
 		return domain.Inspection{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受巡检", hiveID, hive.State)
 	}
+	apiary, ok := m.apiaries[hive.ApiaryID]
+	if !ok {
+		return domain.Inspection{}, domain.Storage("蜂箱 %q 所属蜂场 %q 记录缺失", hiveID, hive.ApiaryID)
+	}
 	m.inspectionSeq++
 	inspection.ID = fmt.Sprintf("inspection-%06d", m.inspectionSeq)
 	inspection.HiveID = hiveID
+	inspection.Keeper = apiary.Keeper
 	m.inspections[hiveID] = append(m.inspections[hiveID], inspection)
 
 	observedAt := inspection.ObservedAt
